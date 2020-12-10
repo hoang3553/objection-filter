@@ -84,8 +84,7 @@ module.exports = function () {
           includes = params.includes,
           filter = params.filter,
           page = params.page,
-          perPage = params.perPage,
-          includesArray = params.includesArray;
+          perPage = params.perPage;
 
 
       applyFields(fields, this._builder);
@@ -96,10 +95,7 @@ module.exports = function () {
       // Clone the query before adding pagination functions in case of counting
       // this.countQuery = this._builder.clone();
       if (includes) {
-        applyEager(includes, this._builder, this.utils);
-      }
-      if (includesArray) {
-        applyEagerArray(includesArray, this._builder, this.Model);
+        applyEager(includes, this._builder, this.utils, this.Model);
       }
 
       applyLimit(limit, offset, page, perPage, this._builder);
@@ -198,15 +194,10 @@ var applyEagerFilter = function applyEagerFilter() {
 
 var applyEagerObject = function applyEagerObject(expression, builder, utils) {
   var expressionWithoutFilters = applyEagerFilter(expression, builder, [], utils);
-  builder.eager(expressionWithoutFilters);
+  builder.withGraphFetched(expressionWithoutFilters);
 };
 
-var applyEager = function applyEager(eager, builder, utils) {
-  if ((typeof eager === 'undefined' ? 'undefined' : _typeof(eager)) === 'object') return applyEagerObject(eager, builder, utils);
-  if (typeof eager === 'string') builder.eager('[' + eager + ']');
-};
-
-var applyEagerArray = function applyEagerArray(eager, builder, Model) {
+var applyEager = function applyEager(eager, builder, utils, Model) {
   var arrayEager = eager.split(',');
   var _iteratorNormalCompletion = true;
   var _didIteratorError = false;
@@ -214,22 +205,23 @@ var applyEagerArray = function applyEagerArray(eager, builder, Model) {
 
   try {
     for (var _iterator = arrayEager[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
-      var element = _step.value;
+      var _eager = _step.value;
 
-      if (!Model.arrayRelationMappings) {
-        throw new TypeError('Unknown relation "' + element.trim() + '" in an array eager expression');
+      _eager = _eager.trim();
+      if ((typeof _eager === 'undefined' ? 'undefined' : _typeof(_eager)) === 'object') {
+        return applyEagerObject(_eager, builder, utils);
+      } else if (Object.keys(Model.relationMappings).includes(_eager)) {
+        builder.withGraphFetched('' + _eager);
+      } else if (Object.keys(Model.arrayRelationMappings).includes(_eager)) {
+        var _Model$arrayRelationM = Model.arrayRelationMappings[_eager.trim()],
+            key = _Model$arrayRelationM.key,
+            as = _Model$arrayRelationM.as,
+            relatedModel = _Model$arrayRelationM.relatedModel;
+
+        builder.select(raw('\n          (select array_to_json(array_agg(row_to_json(d)))\n            from (\n              select *\n              from "' + relatedModel + '"\n              where "' + relatedModel + '".id = any ("' + builder.tableName() + '"."' + key + '")\n            ) d\n            ) as ' + as));
+      } else {
+        throw new TypeError('unknown relation "' + _eager.trim() + '" in an eager expression');
       }
-
-      if (!Object.keys(Model.arrayRelationMappings).includes(element.trim())) {
-        throw new TypeError('Unknown relation "' + element.trim() + '" in an array eager expression');
-      }
-      var _Model$arrayRelationM = Model.arrayRelationMappings[element.trim()],
-          key = _Model$arrayRelationM.key,
-          as = _Model$arrayRelationM.as,
-          relatedModel = _Model$arrayRelationM.relatedModel;
-
-
-      builder.select(raw('\n      (select array_to_json(array_agg(row_to_json(d)))\n        from (\n          select *\n          from "' + relatedModel + '"\n          where "' + relatedModel + '".id = any ("' + builder.tableName() + '"."' + key + '")\n        ) d\n        ) as ' + as));
     }
   } catch (err) {
     _didIteratorError = true;
@@ -246,6 +238,7 @@ var applyEagerArray = function applyEagerArray(eager, builder, Model) {
     }
   }
 };
+
 module.exports.applyEager = applyEager;
 
 /**

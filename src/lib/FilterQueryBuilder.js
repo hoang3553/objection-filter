@@ -57,7 +57,6 @@ module.exports = class FilterQueryBuilder {
       filter,
       page,
       perPage,
-      includesArray
     } = params;
 
     applyFields(fields, this._builder);
@@ -68,10 +67,7 @@ module.exports = class FilterQueryBuilder {
     // Clone the query before adding pagination functions in case of counting
     // this.countQuery = this._builder.clone();
     if (includes) {
-      applyEager(includes, this._builder, this.utils);
-    }
-    if (includesArray) {
-      applyEagerArray(includesArray, this._builder, this.Model);
+      applyEager(includes, this._builder, this.utils, this.Model);
     }
 
     applyLimit(limit, offset, page, perPage, this._builder);
@@ -168,38 +164,35 @@ const applyEagerObject = function (expression, builder, utils) {
     [],
     utils
   );
-  builder.eager(expressionWithoutFilters);
+  builder.withGraphFetched(expressionWithoutFilters);
 };
 
-const applyEager = function (eager, builder, utils) {
-  if (typeof eager === 'object') return applyEagerObject(eager, builder, utils);
-  if (typeof eager === 'string') builder.eager(`[${eager}]`);
-};
-
-const applyEagerArray = function (eager, builder, Model) {
+const applyEager = function (eager, builder, utils, Model) {
   const arrayEager = eager.split(',');
-  for (const element of arrayEager) {
-    if (!Model.arrayRelationMappings) {
-      throw new TypeError(`Unknown relation "${element.trim()}" in an array eager expression`);
+  for (let eager of arrayEager) {
+    eager = eager.trim();
+    if (typeof eager === 'object') {
+      return applyEagerObject(eager, builder, utils);
+    } else if (Object.keys(Model.relationMappings).includes(eager)) {
+      builder.withGraphFetched(`${eager}`)
+    } else if (Object.keys(Model.arrayRelationMappings).includes(eager)) {
+      const { key, as, relatedModel } = Model.arrayRelationMappings[eager.trim()];
+      builder.select(
+        raw(`
+          (select array_to_json(array_agg(row_to_json(d)))
+            from (
+              select *
+              from "${relatedModel}"
+              where "${relatedModel}".id = any ("${builder.tableName()}"."${key}")
+            ) d
+            ) as ${as}`)
+      )
+    } else {
+      throw new TypeError(`unknown relation "${eager.trim()}" in an eager expression`);
     }
-
-    if (!Object.keys(Model.arrayRelationMappings).includes(element.trim())) {
-      throw new TypeError(`Unknown relation "${element.trim()}" in an array eager expression`);
-    }
-    const { key, as, relatedModel } = Model.arrayRelationMappings[element.trim()];
-
-    builder.select(
-      raw(`
-      (select array_to_json(array_agg(row_to_json(d)))
-        from (
-          select *
-          from "${relatedModel}"
-          where "${relatedModel}".id = any ("${builder.tableName()}"."${key}")
-        ) d
-        ) as ${as}`)
-    )
   }
-}
+};
+
 module.exports.applyEager = applyEager;
 
 /**
