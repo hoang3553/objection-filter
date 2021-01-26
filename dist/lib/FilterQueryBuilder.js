@@ -31,16 +31,19 @@ var _ = require('lodash');
 var _require = require('../config'),
     debug = _require.debug;
 
-var _require2 = require('./utils'),
-    sliceRelation = _require2.sliceRelation,
-    Operations = _require2.Operations;
+var _require2 = require('objection'),
+    raw = _require2.raw;
 
-var _require3 = require('./ExpressionBuilder'),
-    createRelationExpression = _require3.createRelationExpression;
+var _require3 = require('./utils'),
+    sliceRelation = _require3.sliceRelation,
+    Operations = _require3.Operations;
 
-var _require4 = require('./LogicalIterator'),
-    iterateLogicalExpression = _require4.iterateLogicalExpression,
-    getPropertiesFromExpression = _require4.getPropertiesFromExpression;
+var _require4 = require('./ExpressionBuilder'),
+    createRelationExpression = _require4.createRelationExpression;
+
+var _require5 = require('./LogicalIterator'),
+    iterateLogicalExpression = _require5.iterateLogicalExpression,
+    getPropertiesFromExpression = _require5.getPropertiesFromExpression;
 
 var baseFields = ['id', 'createdAt', 'updatedAt'];
 
@@ -92,8 +95,9 @@ module.exports = function () {
       // Clone the query before adding pagination functions in case of counting
       // this.countQuery = this._builder.clone();
       if (includes) {
-        applyEager(includes, this._builder, this.utils);
+        applyEager(includes, this._builder, this.utils, this.Model);
       }
+
       applyLimit(limit, offset, page, perPage, this._builder);
 
       return this._builder;
@@ -190,13 +194,51 @@ var applyEagerFilter = function applyEagerFilter() {
 
 var applyEagerObject = function applyEagerObject(expression, builder, utils) {
   var expressionWithoutFilters = applyEagerFilter(expression, builder, [], utils);
-  builder.eager(expressionWithoutFilters);
+  builder.withGraphFetched(expressionWithoutFilters);
 };
 
-var applyEager = function applyEager(eager, builder, utils) {
-  if ((typeof eager === 'undefined' ? 'undefined' : _typeof(eager)) === 'object') return applyEagerObject(eager, builder, utils);
-  if (typeof eager === 'string') builder.eager('[' + eager + ']');
+var applyEager = function applyEager(eager, builder, utils, Model) {
+  var arrayEager = eager.split(',');
+  var _iteratorNormalCompletion = true;
+  var _didIteratorError = false;
+  var _iteratorError = undefined;
+
+  try {
+    for (var _iterator = arrayEager[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
+      var _eager = _step.value;
+
+      _eager = _eager.trim();
+      if ((typeof _eager === 'undefined' ? 'undefined' : _typeof(_eager)) === 'object') {
+        return applyEagerObject(_eager, builder, utils);
+      } else if (Object.keys(Model.relationMappings).includes(_eager)) {
+        builder.withGraphFetched('' + _eager);
+      } else if (Object.keys(Model.arrayRelationMappings).includes(_eager)) {
+        var _Model$arrayRelationM = Model.arrayRelationMappings[_eager.trim()],
+            key = _Model$arrayRelationM.key,
+            as = _Model$arrayRelationM.as,
+            relatedModel = _Model$arrayRelationM.relatedModel;
+
+        builder.select(raw('\n          (select array_to_json(array_agg(row_to_json(d)))\n            from (\n              select *\n              from "' + relatedModel + '"\n              where "' + relatedModel + '".id = any ("' + builder.tableName() + '"."' + key + '")\n            ) d\n            ) as ' + as));
+      } else {
+        throw new TypeError('unknown relation "' + _eager.trim() + '" in an eager expression');
+      }
+    }
+  } catch (err) {
+    _didIteratorError = true;
+    _iteratorError = err;
+  } finally {
+    try {
+      if (!_iteratorNormalCompletion && _iterator.return) {
+        _iterator.return();
+      }
+    } finally {
+      if (_didIteratorError) {
+        throw _iteratorError;
+      }
+    }
+  }
 };
+
 module.exports.applyEager = applyEager;
 
 /**

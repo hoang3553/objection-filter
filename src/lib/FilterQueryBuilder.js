@@ -18,6 +18,7 @@
 
 const _ = require('lodash');
 const { debug } = require('../config');
+const { raw } = require('objection');
 const { sliceRelation, Operations } = require('./utils');
 const { createRelationExpression } = require('./ExpressionBuilder');
 const {
@@ -66,8 +67,9 @@ module.exports = class FilterQueryBuilder {
     // Clone the query before adding pagination functions in case of counting
     // this.countQuery = this._builder.clone();
     if (includes) {
-      applyEager(includes, this._builder, this.utils);
+      applyEager(includes, this._builder, this.utils, this.Model);
     }
+
     applyLimit(limit, offset, page, perPage, this._builder);
 
     return this._builder;
@@ -96,7 +98,7 @@ module.exports = class FilterQueryBuilder {
  * @param {Array<string>} path An array of the current relation
  * @param {Object} utils
  */
-const applyEagerFilter = function(expression = {}, builder, path, utils) {
+const applyEagerFilter = function (expression = {}, builder, path, utils) {
   debug(
     'applyEagerFilter(',
     {
@@ -155,20 +157,42 @@ const applyEagerFilter = function(expression = {}, builder, path, utils) {
   return expression;
 };
 
-const applyEagerObject = function(expression, builder, utils) {
+const applyEagerObject = function (expression, builder, utils) {
   const expressionWithoutFilters = applyEagerFilter(
     expression,
     builder,
     [],
     utils
   );
-  builder.eager(expressionWithoutFilters);
+  builder.withGraphFetched(expressionWithoutFilters);
 };
 
-const applyEager = function(eager, builder, utils) {
-  if (typeof eager === 'object') return applyEagerObject(eager, builder, utils);
-  if (typeof eager === 'string') builder.eager(`[${eager}]`);
+const applyEager = function (eager, builder, utils, Model) {
+  const arrayEager = eager.split(',');
+  for (let eager of arrayEager) {
+    eager = eager.trim();
+    if (typeof eager === 'object') {
+      return applyEagerObject(eager, builder, utils);
+    } else if (Object.keys(Model.relationMappings).includes(eager)) {
+      builder.withGraphFetched(`${eager}`)
+    } else if (Object.keys(Model.arrayRelationMappings).includes(eager)) {
+      const { key, as, relatedModel } = Model.arrayRelationMappings[eager.trim()];
+      builder.select(
+        raw(`
+          (select array_to_json(array_agg(row_to_json(d)))
+            from (
+              select *
+              from "${relatedModel}"
+              where "${relatedModel}".id = any ("${builder.tableName()}"."${key}")
+            ) d
+            ) as ${as}`)
+      )
+    } else {
+      throw new TypeError(`unknown relation "${eager.trim()}" in an eager expression`);
+    }
+  }
 };
+
 module.exports.applyEager = applyEager;
 
 /**
@@ -176,7 +200,7 @@ module.exports.applyEager = applyEager;
  * e.g. "name" => false, "movies.name" => true
  * @param {String} name
  */
-const isRelatedProperty = function(name) {
+const isRelatedProperty = function (name) {
   return !!sliceRelation(name).relationName;
 };
 
@@ -188,7 +212,7 @@ const isRelatedProperty = function(name) {
  * @param {Object} filter
  * @param {QueryBuilder} builder The root query builder
  */
-const applyRequire = function(filter = {}, builder, utils) {
+const applyRequire = function (filter = {}, builder, utils) {
   const { applyPropertyExpression } = utils;
 
   // If there are no properties at all, just return
@@ -196,10 +220,10 @@ const applyRequire = function(filter = {}, builder, utils) {
   if (propertiesSet.length === 0) return builder;
 
   const applyLogicalExpression = iterateLogicalExpression({
-    onExit: function(propertyName, value, builder) {
+    onExit: function (propertyName, value, builder) {
       applyPropertyExpression(propertyName, value, builder);
     },
-    onLiteral: function() {
+    onLiteral: function () {
       throw new Error('Filter is invalid');
     },
   });
@@ -228,7 +252,7 @@ const applyRequire = function(filter = {}, builder, utils) {
     if (joinRelation) filterQuery.joinRelation(joinRelation);
 
     const filterQueryAlias = 'filter_query';
-    builder.innerJoin(filterQuery.as(filterQueryAlias), function() {
+    builder.innerJoin(filterQuery.as(filterQueryAlias), function () {
       fullIdColumns.forEach((fullIdColumn, index) => {
         this.on(fullIdColumn, '=', `${filterQueryAlias}.${idColumns[index]}`);
       });
@@ -247,7 +271,7 @@ module.exports.applyRequire = applyRequire;
  * @param {Object} filter The filter object
  * @param {QueryBuilder} builder The root query builder
  */
-const applyWhere = function(filter = {}, builder, utils, baseModel) {
+const applyWhere = function (filter = {}, builder, utils, baseModel) {
   const { applyPropertyExpression } = utils;
   const Model = builder.modelClass();
 
@@ -278,9 +302,8 @@ const applyWhere = function(filter = {}, builder, utils, baseModel) {
 
     // Eager query fields should include the eager model table name
     builder.modifyEager(relationName, eagerBuilder => {
-      const fullyQualifiedProperty = `${
-        eagerBuilder.modelClass().tableName
-      }.${propertyName}`;
+      const fullyQualifiedProperty = `${eagerBuilder.modelClass().tableName
+        }.${propertyName}`;
       applyPropertyExpression(
         fullyQualifiedProperty,
         andExpression,
@@ -300,7 +323,7 @@ module.exports.applyWhere = applyWhere;
  * @param {String} order An comma delimited order expression
  * @param {QueryBuilder} builder The root query builder
  */
-const applyOrder = function(order, builder, baseModel) {
+const applyOrder = function (order, builder, baseModel) {
   if (!order) return;
   const Model = builder.modelClass();
 
@@ -363,7 +386,7 @@ const selectFields = (fields = [], builder, relationName) => {
  * @param {Array<String>} fields An array of dot notation fields
  * @param {QueryBuilder} builder The root query builder
  */
-const applyFields = function(fields = [], builder) {
+const applyFields = function (fields = [], builder) {
   const Model = builder.modelClass();
 
   // Group fields by relation e.g. ["a.b.name", "a.b.id"] => {"a.b": ["name", "id"]}
@@ -392,7 +415,7 @@ const applyFields = function(fields = [], builder) {
 };
 module.exports.applyFields = applyFields;
 
-const applyLimit = function(limit, offset, page, perPage, builder) {
+const applyLimit = function (limit, offset, page, perPage, builder) {
   if (page && perPage) {
     builder.page(page - 1, perPage);
     return builder;
